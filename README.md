@@ -90,3 +90,11 @@ export interface Trade {
   closePrice?: number;
 }
 ```
+
+### Contribution
+- Pull request or just fork it and do what you want, I'm not your dad
+
+### TODO:
+- Edit flow isnt fleshed out yet but should be rather simple to finish up.
+- Gating to certain channels
+- 
