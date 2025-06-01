@@ -1,17 +1,15 @@
 {
   "name": "discord_trade_tracker",
   "scripts": {
-    "start": "npm run build && node dist/app/bot.js",
+    "start": "npm run build && node dist/bot.js",
     "build": "tsc",
     "dev": "nodemon ./app/bot.ts"
   },
   "dependencies": {
     "better-sqlite3": "^11.10.0",
-    "binance-api-node": "^0.12.9",
     "ccxt": "^4.4.80",
     "discord.js": "^14.19.3",
-    "dotenv": "^16.5.0",
-    "node-binance-api": "^1.0.8"
+    "dotenv": "^16.5.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
