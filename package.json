@@ -8,7 +8,7 @@
   "dependencies": {
     "better-sqlite3": "^11.10.0",
     "ccxt": "^4.4.80",
-    "discord.js": "^14.19.3",
+    "discord.js": "14.19.3",
     "dotenv": "^16.5.0"
   },
   "devDependencies": {
