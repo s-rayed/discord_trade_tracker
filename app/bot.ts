@@ -1,26 +1,26 @@
+import * as ccxt from 'ccxt';
 import {
-  Client,
-  SlashCommandBuilder,
+  ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  ActionRowBuilder,
+  Client,
+  CommandInteractionOptionResolver,
+  DMChannel,
+  EmbedBuilder,
   ModalBuilder,
+  PermissionsBitField,
+  SlashCommandBuilder,
+  TextChannel,
   TextInputBuilder,
   TextInputStyle,
-  EmbedBuilder,
-  PermissionsBitField,
-  CommandInteractionOptionResolver,
-  TextChannel,
-  DMChannel,
 } from 'discord.js';
-import * as ccxt from 'ccxt';
 import * as dotenv from 'dotenv';
 import {
   Trade,
-  saveTrade,
-  getTrade,
-  updateTrade,
   getActiveTrades,
+  getTrade,
+  saveTrade,
+  updateTrade,
 } from './database';
 
 dotenv.config();
@@ -66,8 +66,15 @@ const generateTradeId = (userId: string, channelId: string) =>
 const calculateROE = (
   entryPrice: number,
   currentPrice: number,
-  leverage: number
-) => ((currentPrice - entryPrice) / entryPrice) * leverage * 100;
+  leverage: number,
+  direction: 'long' | 'short'
+) => {
+  const priceChange =
+    direction === 'long'
+      ? (currentPrice - entryPrice) / entryPrice
+      : (entryPrice - currentPrice) / entryPrice;
+  return priceChange * leverage * 100;
+};
 
 // Slash command
 const tradeCommand = new SlashCommandBuilder()
@@ -110,10 +117,16 @@ client.on('interactionCreate', async (interaction) => {
       interaction.isButton() &&
       interaction.customId.startsWith('close_')
     ) {
-      // Defer only for close button (ephemeral reply needed)
+      // Defer close button (ephemeral reply needed)
+      await interaction.deferReply({ ephemeral: true });
+    } else if (
+      interaction.isButton() &&
+      ['bitget', 'bybit', 'mexc'].includes(interaction.customId)
+    ) {
+      // Defer exchange button (ephemeral reply needed)
       await interaction.deferReply({ ephemeral: true });
     }
-    // Note: Do NOT defer for exchange selection buttons (bitget, bybit, mexc)
+    // Note: Do NOT defer for direction selection buttons (long, short)
     // because showModal() will handle the response immediately
   } catch (error) {
     console.error('Failed to defer interaction:', error);
@@ -164,9 +177,35 @@ client.on('interactionCreate', async (interaction) => {
     interaction.isButton() &&
     ['bitget', 'bybit', 'mexc'].includes(interaction.customId)
   ) {
+    const exchange = interaction.customId;
+
+    const directionButtons = [
+      new ButtonBuilder()
+        .setCustomId(`direction_long_${exchange}`)
+        .setLabel('Long')
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(`direction_short_${exchange}`)
+        .setLabel('Short')
+        .setStyle(ButtonStyle.Danger),
+    ];
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      directionButtons
+    );
+
+    await interaction.editReply({
+      content: `Select trade direction for ${exchange}:`,
+      components: [row],
+    });
+  }
+
+  if (interaction.isButton() && interaction.customId.startsWith('direction_')) {
+    const [, dir, exchange] = interaction.customId.split('_');
+    const direction = dir as 'long' | 'short';
+
     const modal = new ModalBuilder()
-      .setCustomId(`trade_modal_${interaction.customId}`)
-      .setTitle('Enter Trade Details');
+      .setCustomId(`trade_modal_${exchange}_${direction}`)
+      .setTitle(`Enter Trade Details for ${exchange} ${direction}`);
 
     const inputs = [
       new TextInputBuilder()
@@ -212,10 +251,9 @@ client.on('interactionCreate', async (interaction) => {
     interaction.isModalSubmit() &&
     interaction.customId.startsWith('trade_modal_')
   ) {
-    const exchange = interaction.customId.replace('trade_modal_', '') as
-      | 'bitget'
-      | 'bybit'
-      | 'mexc';
+    const [, , exc, dir] = interaction.customId.split('_');
+    const exchange = exc as 'bitget' | 'bybit' | 'mexc';
+    const direction = dir as 'long' | 'short';
     const ticker = interaction.fields.getTextInputValue('ticker').toUpperCase();
     const leverage = parseFloat(
       interaction.fields.getTextInputValue('leverage')
@@ -277,6 +315,7 @@ client.on('interactionCreate', async (interaction) => {
         ticker,
         leverage,
         exchange,
+        direction,
         stopLoss,
         takeProfit,
         entryPrice: entryPrice ?? currentPrice ?? 0,
@@ -377,7 +416,8 @@ client.on('interactionCreate', async (interaction) => {
       const roe = calculateROE(
         trade.entryPrice,
         closePrice ?? 0,
-        trade.leverage
+        trade.leverage,
+        trade.direction
       );
 
       trade.closed = true;
@@ -413,15 +453,29 @@ client.on('interactionCreate', async (interaction) => {
   }
 });
 
+function capitalize(str: string) {
+  if (str.length === 0) {
+    return ''; // Handle empty strings
+  }
+  return str.charAt(0).toUpperCase() + str.slice(1);
+}
+
 function createTradeEmbed(
   trade: Trade,
   currentPrice: number | undefined,
   isClosed: boolean = false
 ): { embeds: EmbedBuilder[]; components: ActionRowBuilder<ButtonBuilder>[] } {
-  const roe = calculateROE(trade.entryPrice, currentPrice ?? 0, trade.leverage); // Use 0 if price is undefined
+  const roe = calculateROE(
+    trade.entryPrice,
+    currentPrice ?? 0,
+    trade.leverage,
+    trade.direction
+  ); // Use 0 if price is undefined
 
   const embed = new EmbedBuilder()
-    .setTitle(`Trade ${isClosed ? 'Closed' : 'Active'}`)
+    .setTitle(
+      `${capitalize(trade.direction)} Trade ${isClosed ? 'Closed' : 'Active'} `
+    )
     .setDescription(`Trade details for <@${trade.userId}>`) // Use user mention
     .addFields(
       { name: 'Ticker', value: trade.ticker, inline: true },

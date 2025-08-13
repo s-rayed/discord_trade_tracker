@@ -6,6 +6,7 @@ export interface Trade {
   ticker: string;
   leverage: number;
   exchange: 'bitget' | 'bybit' | 'mexc';
+  direction: 'long' | 'short';
   stopLoss: number;
   takeProfit: number;
   entryPrice: number;
@@ -22,6 +23,7 @@ interface TradeRow {
   ticker: string;
   leverage: number;
   exchange: string;
+  direction: string;
   stopLoss: number;
   takeProfit: number;
   entryPrice: number;
@@ -48,6 +50,7 @@ class DatabaseClient<T> {
         ticker TEXT NOT NULL,
         leverage REAL NOT NULL,
         exchange TEXT NOT NULL,
+        direction TEXT NOT NULL,
         stopLoss REAL NOT NULL,
         takeProfit REAL NOT NULL,
         entryPrice REAL NOT NULL,
@@ -100,6 +103,7 @@ const mapTradeRowToTrade = (row: TradeRow): Trade => ({
   ticker: row.ticker,
   leverage: row.leverage,
   exchange: row.exchange as 'bitget' | 'bybit' | 'mexc', // Cast back to union type
+  direction: row.direction as 'long' | 'short',
   stopLoss: row.stopLoss,
   takeProfit: row.takeProfit,
   entryPrice: row.entryPrice,
@@ -118,6 +122,7 @@ export const saveTrade = (trade: Trade): void => {
       string,
       number,
       string,
+      string,
       number,
       number,
       number,
@@ -129,9 +134,9 @@ export const saveTrade = (trade: Trade): void => {
     ]
   >(`
     INSERT OR REPLACE INTO trades (
-      tradeId, ticker, leverage, exchange, stopLoss, takeProfit,
+      tradeId, ticker, leverage, exchange, direction, stopLoss, takeProfit,
       entryPrice, userId, channelId, messageId, closed, closePrice
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   stmt.run(
@@ -139,6 +144,7 @@ export const saveTrade = (trade: Trade): void => {
     trade.ticker,
     trade.leverage,
     trade.exchange,
+    trade.direction,
     trade.stopLoss,
     trade.takeProfit,
     trade.entryPrice,
@@ -175,6 +181,7 @@ export const updateTrade = (trade: Trade): void => {
       string,
       number,
       string,
+      string,
       number,
       number,
       number,
@@ -187,7 +194,7 @@ export const updateTrade = (trade: Trade): void => {
     ]
   >(`
     UPDATE trades SET
-      ticker = ?, leverage = ?, exchange = ?, stopLoss = ?,
+      ticker = ?, leverage = ?, exchange = ?, direction = ?, stopLoss = ?,
       takeProfit = ?, entryPrice = ?, userId = ?, channelId = ?,
       messageId = ?, closed = ?, closePrice = ?
     WHERE tradeId = ?
@@ -197,6 +204,7 @@ export const updateTrade = (trade: Trade): void => {
     trade.ticker,
     trade.leverage,
     trade.exchange,
+    trade.direction,
     trade.stopLoss,
     trade.takeProfit,
     trade.entryPrice,
@@ -204,7 +212,7 @@ export const updateTrade = (trade: Trade): void => {
     trade.channelId,
     trade.messageId ?? (null as any),
     trade.closed ? 1 : 0,
-    trade.closePrice ?? 0,
+    trade.closePrice ?? (null as any),
     trade.tradeId
   );
 };
