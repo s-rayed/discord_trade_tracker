@@ -97,3 +97,6 @@ export interface Trade {
 ### TODO:
 - Gating to certain channels
 - 
+
+## License
+This project is licensed under the GNU General Public License v3.0. See the [LICENSE](LICENSE) file for details.
