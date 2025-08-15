@@ -58,7 +58,7 @@ A Discord bot for creating, managing, and tracking cryptocurrency trades across 
   - The bot saves the trade in DB and posts an embed with trade details.
 4. Edit a trade:
   - Use `/trade` and select Edit or `/trade action:edit` to edit an existing trade.
-  - Select the trade by providing message id.
+  - Select the trade.
   - Fill out the modal with updated trade details.
   - The bot updates the trade in DB and posts an updated embed with trade details.
 5. Close a trade by clicking the close button in the embed:
@@ -95,6 +95,5 @@ export interface Trade {
 - Pull request or just fork it and do what you want, I'm not your dad
 
 ### TODO:
-- Edit flow isnt fleshed out yet but should be rather simple to finish up.
 - Gating to certain channels
 - 

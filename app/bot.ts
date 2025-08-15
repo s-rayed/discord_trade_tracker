@@ -2,6 +2,7 @@ import * as ccxt from 'ccxt';
 import {
   ActionRowBuilder,
   ButtonBuilder,
+  ButtonInteraction,
   ButtonStyle,
   Client,
   CommandInteractionOptionResolver,
@@ -59,8 +60,12 @@ const exchanges = {
 };
 
 // Utility to generate trade ID
-const generateTradeId = (userId: string, channelId: string) =>
-  `${userId}-${channelId}`;
+const generateTradeId = (
+  userId: string,
+  channelId: string,
+  symbol: string,
+  direction: 'long' | 'short'
+) => `${userId}-${channelId}-${symbol}-${direction}`;
 
 // Utility to calculate ROE
 const calculateROE = (
@@ -118,13 +123,13 @@ client.on('interactionCreate', async (interaction) => {
       interaction.customId.startsWith('close_')
     ) {
       // Defer close button (ephemeral reply needed)
-      await interaction.deferReply({ ephemeral: true });
+      await (interaction as ButtonInteraction).deferReply({ ephemeral: true });
     } else if (
       interaction.isButton() &&
       ['bitget', 'bybit', 'mexc'].includes(interaction.customId)
     ) {
       // Defer exchange button (ephemeral reply needed)
-      await interaction.deferReply({ ephemeral: true });
+      await (interaction as ButtonInteraction).deferReply({ ephemeral: true });
     }
     // Note: Do NOT defer for direction selection buttons (long, short)
     // because showModal() will handle the response immediately
@@ -133,21 +138,54 @@ client.on('interactionCreate', async (interaction) => {
     return; // Exit if deferral fails
   }
 
-  // Handle/trade command
+  // Handle /trade command
   if (interaction.isCommand() && interaction.commandName === 'trade') {
     const action = (
       interaction.options as CommandInteractionOptionResolver
     ).getString('action') as 'create' | 'edit';
-    const tradeId = generateTradeId(interaction.user.id, interaction.channelId);
 
-    if (action === 'edit' && !getTrade(tradeId)) {
+    if (action === 'edit') {
+      const userTrades = getActiveTrades().filter(
+        (t) =>
+          t.userId === interaction.user.id &&
+          t.channelId === interaction.channelId
+      );
+
+      if (userTrades.length === 0) {
+        await interaction.editReply({
+          content: 'No active trades found to edit.',
+        });
+        return;
+      }
+
+      const buttons = userTrades.map((trade) =>
+        new ButtonBuilder()
+          .setCustomId(`edit_${trade.tradeId}`)
+          .setLabel(
+            `${trade.ticker} ${trade.direction.toUpperCase()} on ${
+              trade.exchange
+            }`
+          )
+          .setStyle(ButtonStyle.Primary)
+      );
+
+      const rows: ActionRowBuilder<ButtonBuilder>[] = [];
+      for (let i = 0; i < buttons.length; i += 5) {
+        rows.push(
+          new ActionRowBuilder<ButtonBuilder>().addComponents(
+            ...buttons.slice(i, i + 5)
+          )
+        );
+      }
+
       await interaction.editReply({
-        content: 'No active trade found to edit.',
+        content: 'Select the trade you want to edit:',
+        components: rows,
       });
       return;
     }
 
-    // Create buttons for exchange selection
+    // Create buttons for exchange selection (for create flow)
     const buttons = [
       new ButtonBuilder()
         .setCustomId('bitget')
@@ -172,12 +210,72 @@ client.on('interactionCreate', async (interaction) => {
     });
   }
 
+  // Handle edit trade buttons
+  if (interaction.isButton() && interaction.customId.startsWith('edit_')) {
+    const buttonInteraction = interaction as ButtonInteraction;
+    const tradeId = buttonInteraction.customId.replace('edit_', '');
+    const trade = getTrade(tradeId);
+
+    if (!trade) {
+      await buttonInteraction.editReply({ content: 'Trade not found.' });
+      return;
+    }
+
+    const modal = new ModalBuilder()
+      .setCustomId(
+        `trade_modal_${trade.exchange}_${trade.direction}_${trade.tradeId}`
+      )
+      .setTitle(`Edit Trade ${trade.ticker} ${trade.direction.toUpperCase()}`);
+
+    const inputs = [
+      new TextInputBuilder()
+        .setCustomId('ticker')
+        .setLabel('Crypto Ticker')
+        .setStyle(TextInputStyle.Short)
+        .setValue(trade.ticker)
+        .setRequired(true),
+      new TextInputBuilder()
+        .setCustomId('leverage')
+        .setLabel('Leverage')
+        .setStyle(TextInputStyle.Short)
+        .setValue(trade.leverage.toString())
+        .setRequired(true),
+      new TextInputBuilder()
+        .setCustomId('entryPrice')
+        .setLabel('Entry Price')
+        .setStyle(TextInputStyle.Short)
+        .setValue(trade.entryPrice.toString())
+        .setRequired(true),
+      new TextInputBuilder()
+        .setCustomId('stopLoss')
+        .setLabel('Stop Loss')
+        .setStyle(TextInputStyle.Short)
+        .setValue(trade.stopLoss.toString())
+        .setRequired(true),
+      new TextInputBuilder()
+        .setCustomId('takeProfit')
+        .setLabel('Take Profit')
+        .setStyle(TextInputStyle.Short)
+        .setValue(trade.takeProfit.toString())
+        .setRequired(true),
+    ];
+
+    modal.addComponents(
+      inputs.map((input) =>
+        new ActionRowBuilder<TextInputBuilder>().addComponents(input)
+      )
+    );
+
+    await buttonInteraction.showModal(modal);
+  }
+
   // Handle exchange selection buttons
   if (
     interaction.isButton() &&
     ['bitget', 'bybit', 'mexc'].includes(interaction.customId)
   ) {
-    const exchange = interaction.customId;
+    const buttonInteraction = interaction as ButtonInteraction;
+    const exchange = buttonInteraction.customId;
 
     const directionButtons = [
       new ButtonBuilder()
@@ -193,14 +291,15 @@ client.on('interactionCreate', async (interaction) => {
       directionButtons
     );
 
-    await interaction.editReply({
+    await buttonInteraction.editReply({
       content: `Select trade direction for ${exchange}:`,
       components: [row],
     });
   }
 
   if (interaction.isButton() && interaction.customId.startsWith('direction_')) {
-    const [, dir, exchange] = interaction.customId.split('_');
+    const buttonInteraction = interaction as ButtonInteraction;
+    const [, dir, exchange] = buttonInteraction.customId.split('_');
     const direction = dir as 'long' | 'short';
 
     const modal = new ModalBuilder()
@@ -211,23 +310,28 @@ client.on('interactionCreate', async (interaction) => {
       new TextInputBuilder()
         .setCustomId('ticker')
         .setLabel('Crypto Ticker (e.g., BTCUSDT)')
-        .setStyle(TextInputStyle.Short),
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true),
       new TextInputBuilder()
         .setCustomId('leverage')
         .setLabel('Leverage (e.g., 10)')
-        .setStyle(TextInputStyle.Short),
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true),
       new TextInputBuilder()
         .setCustomId('entryPrice')
         .setLabel('Your Entry Price')
-        .setStyle(TextInputStyle.Short),
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true),
       new TextInputBuilder()
         .setCustomId('stopLoss')
         .setLabel('Stop Loss Price')
-        .setStyle(TextInputStyle.Short),
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true),
       new TextInputBuilder()
         .setCustomId('takeProfit')
         .setLabel('Take Profit Price')
-        .setStyle(TextInputStyle.Short),
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true),
     ];
 
     modal.addComponents(
@@ -237,10 +341,10 @@ client.on('interactionCreate', async (interaction) => {
     );
 
     try {
-      await interaction.showModal(modal);
+      await buttonInteraction.showModal(modal);
     } catch (error) {
       console.error('Failed to show modal:', error);
-      await interaction.editReply({
+      await buttonInteraction.editReply({
         content: 'Failed to show the modal. Please try again.',
       });
     }
@@ -251,21 +355,37 @@ client.on('interactionCreate', async (interaction) => {
     interaction.isModalSubmit() &&
     interaction.customId.startsWith('trade_modal_')
   ) {
-    const [, , exc, dir] = interaction.customId.split('_');
+    const modalInteraction = interaction;
+    const parts = modalInteraction.customId.split('_');
+    const [, , exc, dir, existingTradeId] = parts;
     const exchange = exc as 'bitget' | 'bybit' | 'mexc';
     const direction = dir as 'long' | 'short';
-    const ticker = interaction.fields.getTextInputValue('ticker').toUpperCase();
+
+    let trade = existingTradeId ? getTrade(existingTradeId) : undefined;
+    if (!trade) {
+      // New trade if no existing trade found
+      trade = {
+        tradeId: existingTradeId || '',
+        userId: modalInteraction.user.id,
+        channelId: modalInteraction.channelId ?? 'default-channel-id',
+        closed: false,
+      } as Trade;
+    }
+
+    const ticker = modalInteraction.fields
+      .getTextInputValue('ticker')
+      .toUpperCase();
     const leverage = parseFloat(
-      interaction.fields.getTextInputValue('leverage')
+      modalInteraction.fields.getTextInputValue('leverage')
     );
     const entryPrice = parseFloat(
-      interaction.fields.getTextInputValue('entryPrice')
+      modalInteraction.fields.getTextInputValue('entryPrice')
     );
     const stopLoss = parseFloat(
-      interaction.fields.getTextInputValue('stopLoss')
+      modalInteraction.fields.getTextInputValue('stopLoss')
     );
     const takeProfit = parseFloat(
-      interaction.fields.getTextInputValue('takeProfit')
+      modalInteraction.fields.getTextInputValue('takeProfit')
     );
 
     if (
@@ -274,17 +394,16 @@ client.on('interactionCreate', async (interaction) => {
       isNaN(stopLoss) ||
       isNaN(takeProfit)
     ) {
-      await interaction.editReply({
+      await modalInteraction.editReply({
         content:
-          'Invalid input. Please enter numeric values for leverage, stop loss, and take profit.',
+          'Invalid input. Please enter numeric values for leverage, entry price, stop loss, and take profit.',
       });
       return;
     }
 
     if (leverage <= 0 || entryPrice <= 0) {
-      // --- Add check for positive values including entryPrice ---
-      await interaction.editReply({
-        content: 'Leverage, and Entry Price must be positive numbers.',
+      await modalInteraction.editReply({
+        content: 'Leverage and Entry Price must be positive numbers.',
       });
       return;
     }
@@ -300,29 +419,28 @@ client.on('interactionCreate', async (interaction) => {
       const currentPrice = tickerData.last;
 
       if (!currentPrice) {
-        await interaction.editReply({
+        await modalInteraction.editReply({
           content: 'Failed to fetch current price.',
         });
         return;
       }
 
-      const tradeId = generateTradeId(
-        interaction.user.id,
-        interaction.channelId ?? 'default-channel-id'
+      // Update trade fields from modal
+      trade.ticker = ticker;
+      trade.leverage = leverage;
+      trade.exchange = exchange;
+      trade.direction = direction;
+      trade.entryPrice = entryPrice;
+      trade.stopLoss = stopLoss;
+      trade.takeProfit = takeProfit;
+
+      // Update tradeId to reflect symbol/direction
+      trade.tradeId = generateTradeId(
+        modalInteraction.user.id,
+        modalInteraction.channelId ?? 'default-channel-id',
+        trade.ticker,
+        trade.direction
       );
-      const trade: Trade = {
-        tradeId,
-        ticker,
-        leverage,
-        exchange,
-        direction,
-        stopLoss,
-        takeProfit,
-        entryPrice: entryPrice ?? currentPrice ?? 0,
-        userId: interaction.user.id,
-        channelId: interaction.channelId ?? 'default-channel-id',
-        closed: false,
-      };
 
       saveTrade(trade);
 
@@ -334,15 +452,30 @@ client.on('interactionCreate', async (interaction) => {
 
       let message;
       try {
-        message = await (interaction.channel as TextChannel | DMChannel)?.send({
-          embeds,
-          components,
-        });
+        if (trade.messageId) {
+          // Update existing message if it exists
+          const channel = client.channels.cache.get(trade.channelId) as
+            | TextChannel
+            | DMChannel
+            | undefined;
+          if (channel) {
+            message = await channel.messages.fetch(trade.messageId);
+            await message.edit({ embeds, components });
+          }
+        } else {
+          // Send new message
+          message = await (
+            modalInteraction.channel as TextChannel | DMChannel
+          )?.send({
+            embeds,
+            components,
+          });
+        }
       } catch (error) {
-        console.error('Failed to send message:', error);
-        await interaction.editReply({
+        console.error('Failed to send or update message:', error);
+        await modalInteraction.editReply({
           content:
-            'Trade saved, but failed to send the trade message. Check bot permissions.',
+            'Trade saved, but failed to send or update the trade message. Check bot permissions.',
         });
         return;
       }
@@ -351,46 +484,48 @@ client.on('interactionCreate', async (interaction) => {
         // Store the message ID and update the trade in the database
         trade.messageId = message.id;
         updateTrade(trade);
-        await interaction.editReply({
-          content:
-            'Trade created successfully with your specified entry price! I will update the status periodically.',
+        await modalInteraction.editReply({
+          content: existingTradeId
+            ? 'Trade updated successfully!'
+            : 'Trade created successfully with your specified entry price! I will update the status periodically.',
         });
       } else {
-        await interaction.editReply({
+        await modalInteraction.editReply({
           content:
-            'Trade saved with your entry price, but failed to send the Discord message. Check bot permissions.',
+            'Trade saved, but failed to send the Discord message. Check bot permissions.',
         });
       }
     } catch (error) {
       console.error('Error in modal submission:', error);
-      await interaction.editReply({
+      await modalInteraction.editReply({
         content:
-          'Error creating trade. The exchange API may be slow or ticker is invalid.',
+          'Error creating or updating trade. The exchange API may be slow or ticker is invalid.',
       });
     }
   }
 
   // Handle close position
   if (interaction.isButton() && interaction.customId.startsWith('close_')) {
-    const tradeId = interaction.customId.replace('close_', '');
+    const buttonInteraction = interaction as ButtonInteraction;
+    const tradeId = buttonInteraction.customId.replace('close_', '');
     const trade = getTrade(tradeId);
 
     if (!trade || trade.closed) {
-      await interaction.editReply({
+      await buttonInteraction.editReply({
         content: 'No active trade found or trade already closed.',
       });
       return;
     }
 
     // Check if user is a moderator
-    const member = interaction.member;
+    const member = buttonInteraction.member;
     if (
       !member ||
       !('permissions' in member) ||
       !(member.permissions instanceof PermissionsBitField) ||
       !member.permissions.has(PermissionsBitField.Flags.ManageRoles)
     ) {
-      await interaction.editReply({
+      await buttonInteraction.editReply({
         content: 'Only moderators can close positions.',
       });
       return;
@@ -407,7 +542,7 @@ client.on('interactionCreate', async (interaction) => {
       const closePrice = tickerData.last;
 
       if (!closePrice) {
-        await interaction.editReply({
+        await buttonInteraction.editReply({
           content: 'Failed to fetch current price to close the trade.',
         });
         return;
@@ -415,7 +550,7 @@ client.on('interactionCreate', async (interaction) => {
 
       const roe = calculateROE(
         trade.entryPrice,
-        closePrice ?? 0,
+        closePrice,
         trade.leverage,
         trade.direction
       );
@@ -428,25 +563,25 @@ client.on('interactionCreate', async (interaction) => {
       const { embeds } = createTradeEmbed(trade, closePrice, true);
 
       try {
-        const message = await interaction.channel?.messages.fetch(
+        const message = await buttonInteraction.channel?.messages.fetch(
           trade.messageId!
         );
         await message?.edit({ embeds, components: [] });
       } catch (error) {
         console.error('Failed to edit trade message:', error);
-        await interaction.editReply({
+        await buttonInteraction.editReply({
           content:
             'Trade closed, but failed to update the message. Check bot permissions.',
         });
         return;
       }
 
-      await interaction.editReply({
+      await buttonInteraction.editReply({
         content: 'Trade closed successfully!',
       });
     } catch (error) {
       console.error('Error closing trade:', error);
-      await interaction.editReply({
+      await buttonInteraction.editReply({
         content: 'Error closing trade. The exchange API may be slow.',
       });
     }
@@ -526,8 +661,6 @@ function createTradeEmbed(
 
   return { embeds: [embed], components };
 }
-
-// Add this function after the utility functions
 
 async function updateActiveTrades() {
   console.log('Running active trade update...');
